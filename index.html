@@ -6,6 +6,7 @@
     <title>长期主义消费计算器</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
     <style>
@@ -18,6 +19,24 @@
 <body>
 
 <div id="app" class="min-h-screen p-4 md:p-8 max-w-4xl mx-auto">
+    <div class="mb-6 bg-white rounded-xl p-2 card-shadow flex gap-2">
+        <button
+            @click="activeView = 'dailyCost'"
+            :class="activeView === 'dailyCost' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'"
+            class="flex-1 rounded-lg py-2 text-sm font-medium transition"
+        >
+            日均消费
+        </button>
+        <button
+            @click="activeView = 'assetTracker'"
+            :class="activeView === 'assetTracker' ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'"
+            class="flex-1 rounded-lg py-2 text-sm font-medium transition"
+        >
+            资产净值
+        </button>
+    </div>
+
+    <section v-show="activeView === 'dailyCost'">
     
     <header class="mb-8 text-center">
         <h1 class="text-3xl font-bold text-gray-800 mb-2">长期主义 · 日均消费</h1>
@@ -151,17 +170,264 @@
             </div>
         </div>
     </div>
+    </section>
+
+    <section v-show="activeView === 'assetTracker'" class="space-y-6">
+        <header class="text-center">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">资产净值记录</h1>
+            <p class="text-gray-500 text-sm">三类资产分开统计，自动计算净资产和日均消费</p>
+        </header>
+
+        <div class="bg-white rounded-2xl p-6 card-shadow border-l-8 border-green-500">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                    <div class="text-xs text-gray-500">活期资产</div>
+                    <div class="text-2xl font-bold text-blue-600">¥{{ currentAssetsTotal.toFixed(2) }}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-gray-500">固定资产</div>
+                    <div class="text-2xl font-bold text-indigo-600">¥{{ fixedAssetsTotal.toFixed(2) }}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-gray-500">信用资产(负债)</div>
+                    <div class="text-2xl font-bold text-amber-600">¥{{ creditAssetsTotal.toFixed(2) }}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-gray-500">净资产</div>
+                    <div class="text-3xl font-bold text-gray-900">¥{{ netAssets.toFixed(2) }}</div>
+                </div>
+            </div>
+
+            <div class="mt-4 pt-4 border-t text-sm">
+                <template v-if="latestDailyConsumption !== null">
+                    <span class="text-gray-600">最近两次录入间隔 {{ latestConsumptionPeriodDays }} 天，日均消费：</span>
+                    <span class="font-bold" :class="latestDailyConsumption >= 0 ? 'text-red-600' : 'text-green-600'">
+                        ¥{{ Math.abs(latestDailyConsumption).toFixed(2) }}/天
+                    </span>
+                    <span class="text-xs text-gray-500 ml-1">
+                        {{ latestDailyConsumption >= 0 ? '(资产下降)' : '(资产增长)' }}
+                    </span>
+                </template>
+                <template v-else>
+                    <span class="text-gray-500">至少保存两次记录后可计算日均消费</span>
+                </template>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl p-6 card-shadow">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">四类资产变化趋势</h2>
+            <div v-if="assetSnapshots.length < 2" class="text-sm text-gray-400">至少保存两条记录后可查看趋势图。</div>
+            <div v-else class="h-80">
+                <canvas ref="assetTrendCanvas"></canvas>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl p-6 card-shadow">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">录入数据</h2>
+
+            <div class="mb-5">
+                <label class="block text-sm text-gray-600 mb-1">记录日期</label>
+                <input v-model="assetForm.recordDate" type="date" class="p-2 border rounded text-sm w-full md:w-60">
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-blue-50 rounded-lg p-4 border border-blue-100">
+                    <h3 class="font-bold text-blue-700 mb-3">活期资产</h3>
+                    <div class="space-y-3">
+                        <input v-model.number="assetForm.wechat" type="number" placeholder="微信余额" class="p-2 border rounded text-sm w-full">
+                        <input v-model.number="assetForm.alipay" type="number" placeholder="支付宝余额" class="p-2 border rounded text-sm w-full">
+                        <div class="space-y-2">
+                            <div class="text-xs text-gray-500">银行卡余额（可多家）</div>
+                            <div v-for="bank in assetForm.bankAccounts" :key="bank.id" class="flex gap-2">
+                                <input v-model="bank.name" type="text" placeholder="银行名称" class="p-2 border rounded text-sm flex-1">
+                                <input v-model.number="bank.balance" type="number" placeholder="余额" class="p-2 border rounded text-sm w-32">
+                                <button @click="removeBankAccount(bank.id)" class="px-3 text-xs text-red-600 hover:bg-red-50 rounded">删</button>
+                            </div>
+                            <button @click="addBankAccount" class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">+ 添加银行卡</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-indigo-50 rounded-lg p-4 border border-indigo-100">
+                    <h3 class="font-bold text-indigo-700 mb-3">固定资产</h3>
+                    <div class="space-y-3">
+                        <div v-for="fixed in assetForm.fixedAssets" :key="fixed.id" class="space-y-2 border rounded p-2 bg-white">
+                            <div class="flex gap-2">
+                                <input v-model="fixed.name" type="text" placeholder="类型名称（如：基金）" class="p-2 border rounded text-sm flex-1">
+                                <select v-model="fixed.currency" class="p-2 border rounded text-sm w-24">
+                                    <option value="CNY">人民币</option>
+                                    <option value="USD">美元</option>
+                                </select>
+                            </div>
+                            <div class="flex gap-2">
+                                <input v-model.number="fixed.amount" type="number" placeholder="金额" class="p-2 border rounded text-sm flex-1">
+                                <input v-if="fixed.currency === 'USD'" v-model.number="fixed.rate" type="number" step="0.0001" placeholder="汇率" class="p-2 border rounded text-sm w-28">
+                                <button @click="removeFixedAssetType(fixed.id)" class="px-3 text-xs text-red-600 hover:bg-red-50 rounded">删</button>
+                            </div>
+                            <div class="text-xs text-gray-500">
+                                折算人民币：¥{{ calculateFixedAssetValue(fixed).toFixed(2) }}
+                            </div>
+                        </div>
+                        <button @click="addFixedAssetType" class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700">+ 添加固定资产类型</button>
+                    </div>
+                </div>
+
+                <div class="bg-amber-50 rounded-lg p-4 border border-amber-100">
+                    <h3 class="font-bold text-amber-700 mb-3">信用资产（负债）</h3>
+                    <div class="space-y-3">
+                        <div v-for="credit in assetForm.creditAssets" :key="credit.id" class="flex gap-2">
+                            <input v-model="credit.name" type="text" placeholder="类型名称（如：信用卡）" class="p-2 border rounded text-sm flex-1">
+                            <input v-model.number="credit.amount" type="number" placeholder="金额" class="p-2 border rounded text-sm w-32">
+                            <button @click="removeCreditAssetType(credit.id)" class="px-3 text-xs text-red-600 hover:bg-red-50 rounded">删</button>
+                        </div>
+                        <button @click="addCreditAssetType" class="text-xs bg-amber-600 text-white px-3 py-1 rounded hover:bg-amber-700">+ 添加信用资产类型</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 flex flex-wrap gap-3">
+                <button @click="saveAssetSnapshot" class="bg-green-600 hover:bg-green-700 text-white rounded px-4 py-2 text-sm font-medium">保存本次记录</button>
+                <button @click="resetAssetForm" class="bg-gray-100 hover:bg-gray-200 text-gray-700 rounded px-4 py-2 text-sm">重置输入</button>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl p-6 card-shadow">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">历史记录</h2>
+            <div v-if="assetSnapshots.length === 0" class="text-sm text-gray-400">暂无记录，先保存一次数据。</div>
+            <div v-else class="space-y-3">
+                <div v-for="snapshot in sortedAssetSnapshots" :key="snapshot.id" class="border rounded-lg p-3 hover:shadow-sm transition">
+                    <div class="flex justify-between items-start gap-3">
+                        <div>
+                            <div class="font-bold text-gray-800">{{ snapshot.recordDate }}</div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                活期 ¥{{ snapshot.currentAssets.toFixed(2) }} ｜ 固定 ¥{{ snapshot.fixedAssets.toFixed(2) }} ｜ 信用 ¥{{ snapshot.creditAssets.toFixed(2) }}
+                            </div>
+                            <div class="text-sm mt-1">
+                                净资产：<span class="font-bold text-gray-900">¥{{ snapshot.netAssets.toFixed(2) }}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button @click="loadSnapshotToForm(snapshot)" class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200">载入</button>
+                            <button @click="deleteAssetSnapshot(snapshot.id)" class="text-xs text-red-500 hover:text-red-700 px-2 py-1">删除</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 
 </div>
 
 <script>
-    const { createApp, ref, computed, onMounted, watch } = Vue;
+    const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
 
     createApp({
         setup() {
+            const todayStr = () => new Date().toISOString().split('T')[0];
+            const createId = () => Date.now() + Math.random();
+            const safeNumber = (value) => {
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : 0;
+            };
+            const buildDefaultFixedAssets = () => ([
+                { id: createId(), name: '投资', amount: '', currency: 'CNY', rate: '' },
+                { id: createId(), name: '美元', amount: '', currency: 'USD', rate: 7.2 }
+            ]);
+            const buildDefaultCreditAssets = () => ([
+                { id: createId(), name: '花呗', amount: '' },
+                { id: createId(), name: '京东白条', amount: '' },
+                { id: createId(), name: '美团月付', amount: '' }
+            ]);
+            const normalizeFixedAssets = (assets) => {
+                if (!Array.isArray(assets) || assets.length === 0) return buildDefaultFixedAssets();
+                return assets.map(asset => ({
+                    id: asset.id ?? createId(),
+                    name: asset.name ?? '',
+                    amount: safeNumber(asset.amount),
+                    currency: asset.currency === 'USD' ? 'USD' : 'CNY',
+                    rate: asset.currency === 'USD' ? safeNumber(asset.rate || 0) : ''
+                }));
+            };
+            const normalizeCreditAssets = (assets) => {
+                if (!Array.isArray(assets) || assets.length === 0) return buildDefaultCreditAssets();
+                return assets.map(asset => ({
+                    id: asset.id ?? createId(),
+                    name: asset.name ?? '',
+                    amount: safeNumber(asset.amount)
+                }));
+            };
+            const calculateFixedAssetValue = (asset) => {
+                const amount = safeNumber(asset.amount);
+                if ((asset.currency || 'CNY') === 'USD') {
+                    return amount * safeNumber(asset.rate);
+                }
+                return amount;
+            };
+            const getLegacyFixedAssets = (source) => {
+                const investment = safeNumber(source.investment);
+                const usdAmount = safeNumber(source.usdAmount);
+                const usdRate = safeNumber(source.usdRate || 7.2);
+                return [
+                    { id: createId(), name: '投资', amount: investment, currency: 'CNY', rate: '' },
+                    { id: createId(), name: '美元', amount: usdAmount, currency: 'USD', rate: usdRate }
+                ];
+            };
+            const getLegacyCreditAssets = (source) => ([
+                { id: createId(), name: '花呗', amount: safeNumber(source.huabei) },
+                { id: createId(), name: '京东白条', amount: safeNumber(source.jd) },
+                { id: createId(), name: '美团月付', amount: safeNumber(source.meituan) }
+            ]);
+            const normalizeSnapshot = (snapshot) => {
+                const detail = snapshot.detail || {};
+                const bankAccounts = Array.isArray(detail.bankAccounts) && detail.bankAccounts.length
+                    ? detail.bankAccounts.map(bank => ({
+                        id: bank.id ?? createId(),
+                        name: bank.name ?? '',
+                        balance: safeNumber(bank.balance)
+                    }))
+                    : [{ id: createId(), name: '', balance: '' }];
+                const fixedAssets = detail.fixedAssets
+                    ? normalizeFixedAssets(detail.fixedAssets)
+                    : getLegacyFixedAssets(detail);
+                const creditAssets = detail.creditAssets
+                    ? normalizeCreditAssets(detail.creditAssets)
+                    : getLegacyCreditAssets(detail);
+                const fixedTotal = fixedAssets.reduce((sum, asset) => sum + calculateFixedAssetValue(asset), 0);
+                const creditTotal = creditAssets.reduce((sum, asset) => sum + safeNumber(asset.amount), 0);
+                const currentTotal = safeNumber(snapshot.currentAssets);
+                return {
+                    id: snapshot.id ?? createId(),
+                    recordDate: snapshot.recordDate || todayStr(),
+                    currentAssets: currentTotal,
+                    fixedAssets: safeNumber(snapshot.fixedAssets || fixedTotal),
+                    creditAssets: safeNumber(snapshot.creditAssets || creditTotal),
+                    netAssets: safeNumber(snapshot.netAssets || (currentTotal + fixedTotal - creditTotal)),
+                    detail: {
+                        wechat: safeNumber(detail.wechat),
+                        alipay: safeNumber(detail.alipay),
+                        bankAccounts,
+                        fixedAssets,
+                        creditAssets
+                    }
+                };
+            };
+
+            const activeView = ref('dailyCost');
+            const assetTrendCanvas = ref(null);
+            let assetTrendChart = null;
+
             // 数据状态
             const items = ref([]); // { id, name, price, date, sold: boolean, soldPrice: 0, soldDate: null }
             const subscriptions = ref([]); // { id, name, price }
+            const assetForm = ref({
+                recordDate: todayStr(),
+                wechat: '',
+                alipay: '',
+                bankAccounts: [{ id: createId(), name: '', balance: '' }],
+                fixedAssets: buildDefaultFixedAssets(),
+                creditAssets: buildDefaultCreditAssets()
+            });
+            const assetSnapshots = ref([]);
             
             // 表单状态
             const newItem = ref({ name: '', price: '', date: new Date().toISOString().split('T')[0] });
@@ -176,14 +442,58 @@
             onMounted(() => {
                 const savedItems = localStorage.getItem('lt_items');
                 const savedSubs = localStorage.getItem('lt_subs');
+                const savedAssetForm = localStorage.getItem('lt_asset_form');
+                const savedAssetSnapshots = localStorage.getItem('lt_asset_snapshots');
                 if (savedItems) items.value = JSON.parse(savedItems);
                 if (savedSubs) subscriptions.value = JSON.parse(savedSubs);
+                if (savedAssetForm) {
+                    const parsed = JSON.parse(savedAssetForm);
+                    const migratedFixedAssets = parsed.fixedAssets
+                        ? normalizeFixedAssets(parsed.fixedAssets)
+                        : getLegacyFixedAssets(parsed);
+                    const migratedCreditAssets = parsed.creditAssets
+                        ? normalizeCreditAssets(parsed.creditAssets)
+                        : getLegacyCreditAssets(parsed);
+                    assetForm.value = {
+                        ...assetForm.value,
+                        ...parsed,
+                        bankAccounts: Array.isArray(parsed.bankAccounts) && parsed.bankAccounts.length
+                            ? parsed.bankAccounts
+                            : [{ id: createId(), name: '', balance: '' }],
+                        fixedAssets: migratedFixedAssets,
+                        creditAssets: migratedCreditAssets
+                    };
+                }
+                if (savedAssetSnapshots) {
+                    const parsedSnapshots = JSON.parse(savedAssetSnapshots);
+                    if (Array.isArray(parsedSnapshots)) {
+                        assetSnapshots.value = parsedSnapshots.map(normalizeSnapshot);
+                    }
+                }
+
+                nextTick(() => {
+                    renderAssetTrendChart();
+                });
             });
 
             // 监听变化并保存
             watch([items, subscriptions], () => {
                 localStorage.setItem('lt_items', JSON.stringify(items.value));
                 localStorage.setItem('lt_subs', JSON.stringify(subscriptions.value));
+            }, { deep: true });
+
+            watch(assetForm, () => {
+                localStorage.setItem('lt_asset_form', JSON.stringify(assetForm.value));
+            }, { deep: true });
+
+            watch(assetSnapshots, () => {
+                localStorage.setItem('lt_asset_snapshots', JSON.stringify(assetSnapshots.value));
+            }, { deep: true });
+
+            watch([assetSnapshots, activeView], async () => {
+                if (activeView.value !== 'assetTracker') return;
+                await nextTick();
+                renderAssetTrendChart();
             }, { deep: true });
 
             // 计算属性：活跃物品
@@ -195,6 +505,133 @@
             const soldItems = computed(() => {
                 return items.value.filter(i => i.sold).sort((a, b) => new Date(b.soldDate) - new Date(a.soldDate));
             });
+
+            const currentAssetsTotal = computed(() => {
+                const bankTotal = assetForm.value.bankAccounts.reduce((sum, bank) => sum + safeNumber(bank.balance), 0);
+                return safeNumber(assetForm.value.wechat) + safeNumber(assetForm.value.alipay) + bankTotal;
+            });
+
+            const fixedAssetsTotal = computed(() => {
+                return assetForm.value.fixedAssets.reduce((sum, asset) => sum + calculateFixedAssetValue(asset), 0);
+            });
+
+            const creditAssetsTotal = computed(() => {
+                return assetForm.value.creditAssets.reduce((sum, asset) => sum + safeNumber(asset.amount), 0);
+            });
+
+            const netAssets = computed(() => {
+                return currentAssetsTotal.value + fixedAssetsTotal.value - creditAssetsTotal.value;
+            });
+
+            const sortedAssetSnapshots = computed(() => {
+                return [...assetSnapshots.value].sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+            });
+
+            const latestDailyConsumptionData = computed(() => {
+                const sortedByDate = [...assetSnapshots.value].sort((a, b) => new Date(a.recordDate) - new Date(b.recordDate));
+                if (sortedByDate.length < 2) return null;
+                const latest = sortedByDate[sortedByDate.length - 1];
+                const previous = sortedByDate[sortedByDate.length - 2];
+                const days = getDaysDiff(previous.recordDate, latest.recordDate);
+                const daily = (previous.netAssets - latest.netAssets) / days;
+                return { daily, days };
+            });
+
+            const latestDailyConsumption = computed(() => {
+                return latestDailyConsumptionData.value ? latestDailyConsumptionData.value.daily : null;
+            });
+
+            const latestConsumptionPeriodDays = computed(() => {
+                return latestDailyConsumptionData.value ? latestDailyConsumptionData.value.days : 0;
+            });
+
+            const trendChartData = computed(() => {
+                const sortedByDate = [...assetSnapshots.value].sort((a, b) => new Date(a.recordDate) - new Date(b.recordDate));
+                return {
+                    labels: sortedByDate.map(snapshot => snapshot.recordDate),
+                    current: sortedByDate.map(snapshot => safeNumber(snapshot.currentAssets)),
+                    fixed: sortedByDate.map(snapshot => safeNumber(snapshot.fixedAssets)),
+                    credit: sortedByDate.map(snapshot => safeNumber(snapshot.creditAssets)),
+                    net: sortedByDate.map(snapshot => safeNumber(snapshot.netAssets))
+                };
+            });
+
+            const renderAssetTrendChart = () => {
+                if (!assetTrendCanvas.value || typeof Chart === 'undefined') return;
+                const data = trendChartData.value;
+                if (!data.labels.length) {
+                    if (assetTrendChart) {
+                        assetTrendChart.destroy();
+                        assetTrendChart = null;
+                    }
+                    return;
+                }
+                const context = assetTrendCanvas.value.getContext('2d');
+                if (assetTrendChart) {
+                    assetTrendChart.destroy();
+                }
+                assetTrendChart = new Chart(context, {
+                    type: 'line',
+                    data: {
+                        labels: data.labels,
+                        datasets: [
+                            {
+                                label: '活期资产',
+                                data: data.current,
+                                borderColor: '#2563eb',
+                                backgroundColor: 'rgba(37, 99, 235, 0.15)',
+                                tension: 0.25,
+                                fill: false
+                            },
+                            {
+                                label: '固定资产',
+                                data: data.fixed,
+                                borderColor: '#4f46e5',
+                                backgroundColor: 'rgba(79, 70, 229, 0.15)',
+                                tension: 0.25,
+                                fill: false
+                            },
+                            {
+                                label: '信用资产(负债)',
+                                data: data.credit,
+                                borderColor: '#d97706',
+                                backgroundColor: 'rgba(217, 119, 6, 0.15)',
+                                tension: 0.25,
+                                fill: false
+                            },
+                            {
+                                label: '净资产',
+                                data: data.net,
+                                borderColor: '#111827',
+                                backgroundColor: 'rgba(17, 24, 39, 0.12)',
+                                borderWidth: 3,
+                                tension: 0.2,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        scales: {
+                            y: {
+                                ticks: {
+                                    callback: (value) => `¥${value}`
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            };
 
             // 核心计算：总日均消费 (只计算当前活跃的)
             const totalDailyCost = computed(() => {
@@ -302,14 +739,144 @@
                 }
             };
 
+            const addBankAccount = () => {
+                assetForm.value.bankAccounts.push({ id: createId(), name: '', balance: '' });
+            };
+
+            const removeBankAccount = (id) => {
+                if (assetForm.value.bankAccounts.length === 1) {
+                    assetForm.value.bankAccounts[0] = { id: assetForm.value.bankAccounts[0].id, name: '', balance: '' };
+                    return;
+                }
+                assetForm.value.bankAccounts = assetForm.value.bankAccounts.filter(bank => bank.id !== id);
+            };
+
+            const resetAssetForm = () => {
+                assetForm.value = {
+                    recordDate: todayStr(),
+                    wechat: '',
+                    alipay: '',
+                    bankAccounts: [{ id: createId(), name: '', balance: '' }],
+                    fixedAssets: buildDefaultFixedAssets(),
+                    creditAssets: buildDefaultCreditAssets()
+                };
+            };
+
+            const addFixedAssetType = () => {
+                assetForm.value.fixedAssets.push({ id: createId(), name: '', amount: '', currency: 'CNY', rate: '' });
+            };
+
+            const removeFixedAssetType = (id) => {
+                if (assetForm.value.fixedAssets.length === 1) {
+                    assetForm.value.fixedAssets[0] = { id: assetForm.value.fixedAssets[0].id, name: '', amount: '', currency: 'CNY', rate: '' };
+                    return;
+                }
+                assetForm.value.fixedAssets = assetForm.value.fixedAssets.filter(asset => asset.id !== id);
+            };
+
+            const addCreditAssetType = () => {
+                assetForm.value.creditAssets.push({ id: createId(), name: '', amount: '' });
+            };
+
+            const removeCreditAssetType = (id) => {
+                if (assetForm.value.creditAssets.length === 1) {
+                    assetForm.value.creditAssets[0] = { id: assetForm.value.creditAssets[0].id, name: '', amount: '' };
+                    return;
+                }
+                assetForm.value.creditAssets = assetForm.value.creditAssets.filter(asset => asset.id !== id);
+            };
+
+            const saveAssetSnapshot = () => {
+                if (!assetForm.value.recordDate) {
+                    alert('请先选择记录日期');
+                    return;
+                }
+                const snapshot = {
+                    id: Date.now(),
+                    recordDate: assetForm.value.recordDate,
+                    currentAssets: currentAssetsTotal.value,
+                    fixedAssets: fixedAssetsTotal.value,
+                    creditAssets: creditAssetsTotal.value,
+                    netAssets: netAssets.value,
+                    detail: {
+                        wechat: safeNumber(assetForm.value.wechat),
+                        alipay: safeNumber(assetForm.value.alipay),
+                        bankAccounts: assetForm.value.bankAccounts.map(bank => ({
+                            id: bank.id,
+                            name: bank.name,
+                            balance: safeNumber(bank.balance)
+                        })),
+                        fixedAssets: assetForm.value.fixedAssets.map(asset => ({
+                            id: asset.id,
+                            name: asset.name,
+                            amount: safeNumber(asset.amount),
+                            currency: asset.currency === 'USD' ? 'USD' : 'CNY',
+                            rate: asset.currency === 'USD' ? safeNumber(asset.rate) : ''
+                        })),
+                        creditAssets: assetForm.value.creditAssets.map(asset => ({
+                            id: asset.id,
+                            name: asset.name,
+                            amount: safeNumber(asset.amount)
+                        }))
+                    }
+                };
+
+                assetSnapshots.value.push(normalizeSnapshot(snapshot));
+                assetSnapshots.value = [...assetSnapshots.value].sort((a, b) => new Date(b.recordDate) - new Date(a.recordDate));
+            };
+
+            const loadSnapshotToForm = (snapshot) => {
+                const detail = snapshot.detail || {};
+                const fixedAssets = detail.fixedAssets
+                    ? normalizeFixedAssets(detail.fixedAssets)
+                    : getLegacyFixedAssets(detail);
+                const creditAssets = detail.creditAssets
+                    ? normalizeCreditAssets(detail.creditAssets)
+                    : getLegacyCreditAssets(detail);
+                assetForm.value = {
+                    recordDate: snapshot.recordDate,
+                    wechat: safeNumber(detail.wechat),
+                    alipay: safeNumber(detail.alipay),
+                    bankAccounts: detail.bankAccounts && detail.bankAccounts.length
+                        ? detail.bankAccounts.map(bank => ({
+                            id: bank.id ?? createId(),
+                            name: bank.name ?? '',
+                            balance: safeNumber(bank.balance)
+                        }))
+                        : [{ id: createId(), name: '', balance: '' }],
+                    fixedAssets,
+                    creditAssets
+                };
+            };
+
+            const deleteAssetSnapshot = (id) => {
+                if (confirm('确定要删除这条资产记录吗？')) {
+                    assetSnapshots.value = assetSnapshots.value.filter(snapshot => snapshot.id !== id);
+                }
+            };
+
             return {
+                activeView,
                 items, subscriptions, newItem, newSub,
                 activeItems, soldItems, totalDailyCost,
                 addItem, deleteItem,
                 showSellModal, itemToSell, sellPriceInput, openSellModal, confirmSell,
                 addSub, deleteSub,
                 deleteSoldItem,
-                getDaysOwned, getDaysDiff, calculateItemDaily, calculateSoldDaily
+                getDaysOwned, getDaysDiff, calculateItemDaily, calculateSoldDaily,
+
+                assetForm, assetSnapshots,
+                currentAssetsTotal, fixedAssetsTotal, creditAssetsTotal, netAssets,
+                latestDailyConsumption, latestConsumptionPeriodDays,
+                assetTrendCanvas,
+                addBankAccount, removeBankAccount,
+                addFixedAssetType, removeFixedAssetType,
+                addCreditAssetType, removeCreditAssetType,
+                resetAssetForm, saveAssetSnapshot,
+                loadSnapshotToForm, deleteAssetSnapshot,
+                sortedAssetSnapshots,
+                calculateFixedAssetValue,
+                safeNumber
             };
         }
     }).mount('#app');
