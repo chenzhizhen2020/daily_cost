@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>长期主义消费计算器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background-color: #f3f4f6; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.5s; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+    </style>
+</head>
+<body>
+
+<div id="app" class="min-h-screen p-4 md:p-8 max-w-4xl mx-auto">
+    
+    <header class="mb-8 text-center">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">长期主义 · 日均消费</h1>
+        <p class="text-gray-500 text-sm mb-6">不看标价，只看持有成本</p>
+        
+        <div class="bg-white rounded-2xl p-6 card-shadow border-l-8 border-green-500 flex flex-col items-center justify-center">
+            <span class="text-gray-500 text-sm uppercase tracking-wide font-semibold">当前每日均摊成本</span>
+            <div class="text-5xl font-bold text-gray-900 mt-2">
+                ¥{{ totalDailyCost.toFixed(2) }}
+            </div>
+            <p class="text-xs text-gray-400 mt-2">
+                (持有物品日摊销 + 订阅制日费)
+            </p>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <div class="bg-white rounded-xl p-6 card-shadow">
+            <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                <i class="fas fa-box text-blue-500 mr-2"></i> 物品资产
+            </h2>
+            
+            <div class="bg-blue-50 p-4 rounded-lg mb-4">
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <input v-model="newItem.name" type="text" placeholder="物品名称 (如: MacBook)" class="p-2 border rounded text-sm w-full">
+                    <input v-model.number="newItem.price" type="number" placeholder="买入金额" class="p-2 border rounded text-sm w-full">
+                </div>
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <input v-model="newItem.date" type="date" class="p-2 border rounded text-sm w-full text-gray-500">
+                    <button @click="addItem" class="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 text-sm font-medium transition">
+                        添加物品
+                    </button>
+                </div>
+            </div>
+
+            <div class="space-y-3">
+                <div v-if="activeItems.length === 0" class="text-center text-gray-400 py-4 text-sm">暂无持有的物品</div>
+                
+                <div v-for="item in activeItems" :key="item.id" class="border rounded-lg p-3 hover:shadow-sm transition relative group bg-white">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <div class="font-bold text-gray-800">{{ item.name }}</div>
+                            <div class="text-xs text-gray-500">
+                                购入: {{ item.date }} | 持有: <span class="font-bold text-blue-600">{{ getDaysOwned(item.date) }}天</span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm font-bold text-red-500">¥{{ calculateItemDaily(item).toFixed(2) }}/天</div>
+                            <div class="text-xs text-gray-400">总价 ¥{{ item.price }}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-3 pt-2 border-t flex justify-end items-center space-x-2">
+                        <button @click="openSellModal(item)" class="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded hover:bg-amber-200">
+                            卖出 / 结束使用
+                        </button>
+                        <button @click="deleteItem(item.id)" class="text-xs text-gray-400 hover:text-red-500 px-2">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            
+            <div class="bg-white rounded-xl p-6 card-shadow">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                    <i class="fas fa-sync-alt text-purple-500 mr-2"></i> 按月订阅
+                </h2>
+                
+                <div class="flex gap-2 mb-4">
+                    <input v-model="newSub.name" type="text" placeholder="服务名 (如: Spotify)" class="p-2 border rounded text-sm flex-grow">
+                    <input v-model.number="newSub.price" type="number" placeholder="月费" class="p-2 border rounded text-sm w-20">
+                    <button @click="addSub" class="bg-purple-600 hover:bg-purple-700 text-white rounded px-3 text-sm">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+
+                <ul class="space-y-2">
+                    <li v-for="sub in subscriptions" :key="sub.id" class="flex justify-between items-center p-2 bg-purple-50 rounded border border-purple-100">
+                        <span class="text-gray-700 text-sm font-medium">{{ sub.name }}</span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-xs text-gray-500">¥{{ sub.price }}/月</span>
+                            <span class="text-sm font-bold text-purple-700">¥{{ (sub.price / 30).toFixed(2) }}/天</span>
+                            <button @click="deleteSub(sub.id)" class="text-gray-400 hover:text-red-500"><i class="fas fa-times"></i></button>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="bg-white rounded-xl p-6 card-shadow opacity-90">
+                <h2 class="text-xl font-bold text-gray-600 mb-4 flex items-center">
+                    <i class="fas fa-history text-gray-400 mr-2"></i> 已归档/卖出
+                </h2>
+                <div class="space-y-2">
+                    <div v-if="soldItems.length === 0" class="text-center text-gray-400 text-xs">暂无历史记录</div>
+                    <div v-for="item in soldItems" :key="item.id" class="flex justify-between items-center p-2 border-b text-sm">
+                        <div>
+                            <span class="text-gray-500 line-through">{{ item.name }}</span>
+                            <div class="text-xs text-gray-400">
+                                买:¥{{item.price}} 卖:¥{{item.soldPrice}} (共{{ getDaysDiff(item.date, item.soldDate) }}天)
+                            </div>
+                        </div>
+                        <div class="text-right flex items-center gap-3">
+                            <button @click="deleteSoldItem(item.id)" class="text-xs text-gray-400 hover:text-red-500 px-2">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            <div>
+                            <div class="font-bold text-gray-600">¥{{ calculateSoldDaily(item).toFixed(2) }}/天</div>
+                            <span class="text-xs bg-gray-200 text-gray-600 px-1 rounded">已结束</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div v-if="showSellModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-xl w-80 shadow-2xl">
+            <h3 class="text-lg font-bold mb-4">卖出/结束使用: {{ itemToSell?.name }}</h3>
+            <label class="block text-sm text-gray-600 mb-1">卖出金额 (残值)</label>
+            <input v-model.number="sellPriceInput" type="number" class="w-full border p-2 rounded mb-4 focus:ring-2 ring-blue-500 outline-none" placeholder="0">
+            
+            <div class="flex justify-end space-x-2">
+                <button @click="showSellModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded text-sm">取消</button>
+                <button @click="confirmSell" class="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">确认卖出</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, watch } = Vue;
+
+    createApp({
+        setup() {
+            // 数据状态
+            const items = ref([]); // { id, name, price, date, sold: boolean, soldPrice: 0, soldDate: null }
+            const subscriptions = ref([]); // { id, name, price }
+            
+            // 表单状态
+            const newItem = ref({ name: '', price: '', date: new Date().toISOString().split('T')[0] });
+            const newSub = ref({ name: '', price: '' });
+            
+            // 弹窗状态
+            const showSellModal = ref(false);
+            const itemToSell = ref(null);
+            const sellPriceInput = ref(0);
+
+            // 本地存储加载
+            onMounted(() => {
+                const savedItems = localStorage.getItem('lt_items');
+                const savedSubs = localStorage.getItem('lt_subs');
+                if (savedItems) items.value = JSON.parse(savedItems);
+                if (savedSubs) subscriptions.value = JSON.parse(savedSubs);
+            });
+
+            // 监听变化并保存
+            watch([items, subscriptions], () => {
+                localStorage.setItem('lt_items', JSON.stringify(items.value));
+                localStorage.setItem('lt_subs', JSON.stringify(subscriptions.value));
+            }, { deep: true });
+
+            // 计算属性：活跃物品
+            const activeItems = computed(() => {
+                return items.value.filter(i => !i.sold).sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
+
+            // 计算属性：已卖出物品
+            const soldItems = computed(() => {
+                return items.value.filter(i => i.sold).sort((a, b) => new Date(b.soldDate) - new Date(a.soldDate));
+            });
+
+            // 核心计算：总日均消费 (只计算当前活跃的)
+            const totalDailyCost = computed(() => {
+                let sum = 0;
+                // 1. 活跃物品的日摊销 = 价格 / 持有至今的天数
+                activeItems.value.forEach(item => {
+                    sum += calculateItemDaily(item);
+                });
+                // 2. 订阅制 = 月费 / 30
+                subscriptions.value.forEach(sub => {
+                    sum += (sub.price / 30);
+                });
+                return sum;
+            });
+
+            // 辅助函数：计算天数
+            const getDaysOwned = (startDate) => {
+                const start = new Date(startDate);
+                const now = new Date();
+                const diffTime = Math.abs(now - start);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+                return Math.max(1, diffDays); // 至少1天，防止除以0
+            };
+
+            const getDaysDiff = (start, end) => {
+                const d1 = new Date(start);
+                const d2 = new Date(end);
+                const diffTime = Math.abs(d2 - d1);
+                return Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+            };
+
+            // 辅助函数：计算单个活跃物品的日成本
+            const calculateItemDaily = (item) => {
+                const days = getDaysOwned(item.date);
+                return item.price / days;
+            };
+
+            // 辅助函数：计算已卖出物品的最终日成本
+            const calculateSoldDaily = (item) => {
+                const days = getDaysDiff(item.date, item.soldDate);
+                const netCost = item.price - (item.soldPrice || 0);
+                return netCost / days;
+            };
+
+            // 操作：添加物品
+            const addItem = () => {
+                if (!newItem.value.name || !newItem.value.price) return;
+                items.value.push({
+                    id: Date.now(),
+                    name: newItem.value.name,
+                    price: parseFloat(newItem.value.price),
+                    date: newItem.value.date,
+                    sold: false
+                });
+                newItem.value.name = ''; // 重置名称，保留日期
+                newItem.value.price = '';
+            };
+
+            // 操作：删除物品 (彻底删除)
+            const deleteItem = (id) => {
+                if(confirm('确定要彻底删除这条记录吗？如果是卖出请使用“卖出”按钮。')) {
+                    items.value = items.value.filter(i => i.id !== id);
+                }
+            };
+
+            // 操作：卖出流程
+            const openSellModal = (item) => {
+                itemToSell.value = item;
+                sellPriceInput.value = 0;
+                showSellModal.value = true;
+            };
+
+            const confirmSell = () => {
+                if (itemToSell.value) {
+                    const index = items.value.findIndex(i => i.id === itemToSell.value.id);
+                    if (index !== -1) {
+                        items.value[index].sold = true;
+                        items.value[index].soldPrice = parseFloat(sellPriceInput.value);
+                        items.value[index].soldDate = new Date().toISOString().split('T')[0];
+                    }
+                }
+                showSellModal.value = false;
+                itemToSell.value = null;
+            };
+
+            // 操作：订阅管理
+            const addSub = () => {
+                if (!newSub.value.name || !newSub.value.price) return;
+                subscriptions.value.push({
+                    id: Date.now(),
+                    name: newSub.value.name,
+                    price: parseFloat(newSub.value.price)
+                });
+                newSub.value.name = '';
+                newSub.value.price = '';
+            };
+
+            const deleteSub = (id) => {
+                subscriptions.value = subscriptions.value.filter(s => s.id !== id);
+            };
+
+            const deleteSoldItem = (id) => {
+                if(confirm('确定要删除这条已归档记录吗？')) {
+                    items.value = items.value.filter(i => i.id !== id);
+                }
+            };
+
+            return {
+                items, subscriptions, newItem, newSub,
+                activeItems, soldItems, totalDailyCost,
+                addItem, deleteItem,
+                showSellModal, itemToSell, sellPriceInput, openSellModal, confirmSell,
+                addSub, deleteSub,
+                deleteSoldItem,
+                getDaysOwned, getDaysDiff, calculateItemDaily, calculateSoldDaily
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
